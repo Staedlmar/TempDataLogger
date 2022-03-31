@@ -6,26 +6,23 @@ ToDo
 - add RTC timer for time in log file
 - add writing to log file (append mode, brauche ich das?)
   - overwrite if file exists..?
+- add zero padding of numbers function (e.g. for printing timee and date)
 */
-
-// REQUIRES the following Arduino libraries:
-// - DHT Sensor Library: https://github.com/adafruit/DHT-sensor-library
-// - Adafruit Unified Sensor Lib: https://github.com/adafruit/Adafruit_Sensor
 
 #include "DHT.h"           // for temperature sensor
 #include "LiquidCrystal.h" // for LCD display
 #include <SPI.h>           // for SD card
 #include <SD.h>            // for SD card
-//#include <RTCZero.h>       // for getting the current time
+#include <RTClib.h>        // for getting the current time
 
 // ######################### set I/O's ##############################################
-#define DHTPIN 2         // Digital pin connected to the DHT sensor (inside temp)
-#define DHTPIN8 8        // Digital pin connected to the DHT sensor (outside temp)
+#define DHTPIN 2            // Digital pin connected to the DHT sensor (inside temp)
+#define DHTPIN8 8           // Digital pin connected to the DHT sensor (outside temp)
 
-const int relaisIN2 = 3; // pin for relais
+const int relaisIN2 = 3;   // pin for relais
 
-const int TempSetUp = 11;
-const int TempSetDown = 12;
+const int TempSetUp = 11;  // button temperature setpoint up
+const int TempSetDown = 12;// button temperature setpoint down
 
 // pins for LCD Display
 const int rs = 10;
@@ -35,36 +32,27 @@ const int d5 = 24;
 const int d6 = 26; 
 const int d7 = 28;
 
-// ######################### prepare Temp sensor (DHT) ##################################
-
-#define DHTTYPE DHT22   // DHT 22 (the DHT11 is the low presission one)
-
-// Connect pin 1 (on the left) of the sensor to +5V
-// NOTE: If using a board with 3.3V logic like an Arduino Due connect pin 1
-// to 3.3V instead of 5V!
-// Connect pin 2 of the sensor to whatever your DHTPIN is
-// Connect pin 4 (on the right) of the sensor to GROUND
-// Connect a 10K resistor from pin 2 (data) to pin 1 (power) of the sensor
-
-// Initialize DHT sensor.
-// Note that older versions of this library took an optional third parameter to
-// tweak the timings for faster processors.  This parameter is no longer needed
-// as the current DHT reading algorithm adjusts itself to work on faster procs.
-
-DHT dht(DHTPIN, DHTTYPE);
-DHT dht2(DHTPIN8, DHTTYPE);
-
+// ############################### constants ############################################
 int count = 0; // counter to switch LCD display between inside and outside temp
 //single TempSet = 20.0; // temperature setpoint
 
-// ######################### prepare LCD display ###########################
-LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
-
-// ######################### prepare SD Card unit ##########################
-int LoggerCount = 0; // count to make logging to SD card less often
-const int LoggerThrsh = 150; // ToDo: make this relavive to the 2s time the dispaly is refreshed
-                             //       we want the SD card tro be updated only every 5min
+int LoggerCount = 150;           // count to make logging to SD card less often (150 to save one value after starting)
+const int LoggerThrsh = 150;     // ToDo: make this relavive to the 2s time the dispaly is refreshed
+                                 //       we want the SD card tro be updated only every 5min
 char filename[] = "TempLog.csv"; // only 8 characters are allowed
+
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+// ######################### create classes #################################
+#define DHTTYPE DHT22   // DHT 22 (the DHT11 is the low presission one)
+
+// Initialize DHT sensor.
+DHT dht(DHTPIN, DHTTYPE);    // create Temp sensor (DHT)  
+DHT dht2(DHTPIN8, DHTTYPE);  // create Temp sensor (DHT)
+
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);  // create LCD display
+
+RTC_DS3231  rtc; // create RTC clock
 
 // #########################################################################
 // ########################     i n i t     ################################
@@ -72,7 +60,12 @@ char filename[] = "TempLog.csv"; // only 8 characters are allowed
 void setup() {
   Serial.begin(9600);
 
-  //rtc.begin(); // initialize RTC
+  // RTC (real time clock) init
+  if (!rtc.begin()) 
+  {
+    Serial.println("Couldn't find RTC");
+  }
+  rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // sets to system time of computer (time of upload)
 
   // Temp sensor init
   dht.begin();  
@@ -109,14 +102,23 @@ void setup() {
   }
 
   delay(1000);
+
+  if (SD.exists(filename))
+  {
+    SD.remove(filename); // after every boot start writing from scratch
+  }
+
   File dataFile = SD.open(filename, FILE_WRITE);
   if (dataFile) 
   {
+	auto dateTimeString = getDateTimeString();
+
     dataFile.println("=================================================================");
     dataFile.println("         Temperature Datalogger by Martin Staedler (2022) ");
+	dataFile.println("         Start time of logging: " + dateTimeString);
     dataFile.println("=================================================================");
     dataFile.println("");
-    int bytesWritten = dataFile.println("In Temp [deg], In Humitity [%], Out Temp [deg], Out Humitity [%] ");
+    int bytesWritten = dataFile.println("Date; Time; In Temp [deg]; In Humitity [%]; Out Temp [deg]; Out Humitity [%] ");
     dataFile.close();
     Serial.print("Bytes written to SD card: ");  // Debugging
     Serial.println(bytesWritten);                // Debugging
@@ -228,22 +230,23 @@ void loop() {
   }
 
   // ##################### Looging to SD card ####################
-  // ToDo: get time using RTC
-  // 
   LoggerCount++;
   if (LoggerCount > LoggerThrsh)
   {
     File dataFile = SD.open(filename, FILE_WRITE);
     if (dataFile) 
     {
+	  auto dateTimeString = getDateTimeString();
+	  dataFile.print(dateTimeString + "; ");
+
       dataFile.print(t);
-      dataFile.print(", ");
+      dataFile.print("; ");
       dataFile.print(h);
-      dataFile.print(", ");
+      dataFile.print("; ");
       dataFile.print(t_out);
-      dataFile.print(", ");
+      dataFile.print("; ");
       dataFile.print(h_out);
-      int bytesWritten = dataFile.println(", ");
+      int bytesWritten = dataFile.println("; ");
       dataFile.close();
       Serial.print("Bytes written to SD (loop) card: ");  // Debugging
       Serial.println(bytesWritten);                // Debugging
@@ -267,7 +270,15 @@ void loop() {
   Serial.print(h_out);
   Serial.print(F("%,  Temperature (OUT): "));
   Serial.print(t_out);
- Serial.print(F("C, "));
-  Serial.println(count);
+  Serial.print(F("C, "));
 
+
+}
+
+String getDateTimeString()
+{
+	DateTime now = rtc.now();
+	char buf[50];
+	sprintf(buf, "%02d-%02d-%4d; %02d:%02d:%02d", now.day(), now.month(), now.year(), now.hour(), now.minute(), now.second());
+	return buf;
 }
