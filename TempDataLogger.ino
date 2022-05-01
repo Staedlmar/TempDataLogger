@@ -15,6 +15,7 @@ ToDo
 // ######################### set I/O's ##############################################
 #define DHTPIN 2            // Digital pin connected to the DHT sensor (inside temp)
 #define DHTPIN8 8           // Digital pin connected to the DHT sensor (outside temp)
+#define DHTPIN11 11         // Digital pin connected to the DHT sensor (outside temp)
 
 const int relaisIN2 = 3;    // pin for relais
 
@@ -33,8 +34,9 @@ const int d7 = 28;
 bool  showTemp;                  // if true temperature will be displayed
 float TempSetDay    = 20.0;      // temperature setpoint day
 float TempSetNight  = 12.0;      // temperature setpoint day
-float TempHyst = 2.0;            // hysteresis for temp control
+float TempHyst = 1.0;            // hysteresis for temp control
 
+int DisplayCount = 0;
 int LoggerCount = 0;             // count to make logging to SD card less often 
 const int LoggerThrsh = 6;       // ToDo: make this relavive to the 10s time the dispaly is refreshed
                                  //       we want the SD card to be updated only every 1min
@@ -48,9 +50,19 @@ float PowerHeater = 2.0;         // electrical power of connected heater [kW]
 float TempSet;                   // actual temperature setpoint
 bool HeatingOn = false;          // boolean to show if heating is on or off
 
+float t;
+float h;
+float t_out;
+float h_out;
+float t_out2;
+float h_out2;
+
 int heatOnTime;
 
 float EnergyCulmulative;         // culmulative energie consumed by heater [kWh]
+
+float DisplayCycle;
+float DisplayCycle_old;
 
 bool MeasurementCycle;
 bool MeasurementCycle_old;
@@ -63,6 +75,7 @@ String Heater = "OFF";
 // Initialize DHT sensor.
 DHT dht(DHTPIN, DHTTYPE);        // create Temp sensor (DHT)  
 DHT dht2(DHTPIN8, DHTTYPE);      // create Temp sensor (DHT)
+DHT dht3(DHTPIN11, DHTTYPE);     // create Temp sensor (DHT)
 
 LiquidCrystal lcd(rs, en, d4, d5, d6, d7);  // create LCD display
 
@@ -84,6 +97,7 @@ void setup() {
   // Temp sensor init
   dht.begin();
   dht2.begin();
+  dht3.begin();
 
   // set up the LCD's number of columns and rows:
   lcd.begin(16, 2);
@@ -126,7 +140,7 @@ void setup() {
     dataFile.println("         Start time of logging: " + dateTimeString);
     dataFile.println("=================================================================");
     dataFile.println("");
-    dataFile.println("Date; Time; In Temp [deg]; In Humitity [%]; Out Temp [deg]; Out Humitity [%]; Temp Set [deg]; heater On [s]; Energy [kWh] ");
+    dataFile.println("Date; Time; In Temp [deg]; In Humitity [%]; Out Temp [deg]; Out Humitity [%]; Out2 Temp [deg]; Out2 Humitity [%]; Temp Set [deg]; heater On [s]; Energy [kWh] ");
     dataFile.close();
   }
   else
@@ -139,10 +153,15 @@ void setup() {
 // ########################     l o o p     ################################
 // #########################################################################
 void loop() {
-  delay(100);
+  //delay(100);
   DateTime now = rtc.now();
+
+  DisplayCycle_old = DisplayCycle;
+  DisplayCycle = now.second();
+
   MeasurementCycle_old = MeasurementCycle;
   MeasurementCycle = (now.second() == 0) || (now.second() == 10) || (now.second() == 20) || (now.second() == 30) || (now.second() == 40) || (now.second() == 50);
+
   if (MeasurementCycle && MeasurementCycle != MeasurementCycle_old)
   {
     // measure every 10s, and make sure we measure just once in 10s
@@ -150,9 +169,9 @@ void loop() {
     // ####################### Temp mesaurement #####################
     // Reading temperature or humidity takes about 250 milliseconds!
     // Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
-    float h = dht.readHumidity();
+    h = dht.readHumidity();
     // Read temperature as Celsius (the default)
-    float t = dht.readTemperature();
+    t = dht.readTemperature();
     // Check if any reads failed and exit early (to try again).
     if (isnan(h) || isnan(t))
     {
@@ -160,9 +179,9 @@ void loop() {
       return;
     }
 
-    float h_out = dht2.readHumidity();
+    h_out = dht2.readHumidity();
     // Read temperature as Celsius (the default)
-    float t_out = dht2.readTemperature();
+    t_out = dht2.readTemperature();
     // Check if any reads failed and exit early (to try again).
     if (isnan(h_out) || isnan(t_out))
     {
@@ -170,6 +189,15 @@ void loop() {
       return;
     }
 
+    h_out2 = dht3.readHumidity();
+    // Read temperature as Celsius (the default)
+    t_out2 = dht3.readTemperature();
+    // Check if any reads failed and exit early (to try again).
+    if (isnan(h_out2) || isnan(t_out2))
+    {
+      Serial.println(F("Failed to read from DHT sensor (outside 2)!"));
+      return;
+    }
     // ####################### Temp Setpoint #####################
     if (digitalRead(TempSetDown))
     {
@@ -196,14 +224,14 @@ void loop() {
     }
 
     // switch ON/OFF heating
-    if (t > (TempSet + TempHyst))
+    if (t > (TempSet))
     {
       // heating OFF
       HeatingOn = false;
       Heater = "OFF";
       digitalWrite(relaisIN2, LOW);  // Relais2 OFF
     }
-    if (t < TempSet)
+    if (t < TempSet - TempHyst)
     {
       // heating ON
       HeatingOn = true;
@@ -213,27 +241,10 @@ void loop() {
       digitalWrite(relaisIN2, HIGH);  // Relais2 ON
     }
 
-    // ####################### Display #####################
-    if (showTemp)
-    {
-      // print Temperature to LCD display
-      String TempIN  = "TS:" + String(TempSet,1) + "|TI:" + String(t, 1)  + "\337";
-      String TempOUT = "H :" + Heater + " |TO:" + String(t_out, 1) + "\337";
-      PrintToLCD(TempIN, TempOUT);
-      showTemp = false;
-    }
-    else
-    {
-      // print humidity to LCD display
-      String HumIN  = "       |HI:" + String(h, 1)  + "%";
-      String HumOUT = "H :" + Heater + " |HO:" + String(h_out, 1) + "%";
-      PrintToLCD(HumIN, HumOUT);
-      showTemp = true;
-    }
 
     // ##################### Looging to SD card ####################
     auto dateTimeString = createDateTimeString(now);
-    String OutStr = dateTimeString + "; " + String(t, 1) + "; " + String(h, 1) + "; " + String(t_out, 1) + "; " + String(h_out, 1) +
+    String OutStr = dateTimeString + "; " + String(t, 1) + "; " + String(h, 1) + "; " + String(t_out, 1) + "; " + String(h_out, 1) + "; " + String(t_out2, 1) + "; " + String(h_out2, 1) +
       "; " + String(TempSet, 1) + "; " + String(heatOnTime) + "; " + String(EnergyCulmulative, 1);
     LoggerCount++;
     if (LoggerCount >= LoggerThrsh)
@@ -256,6 +267,45 @@ void loop() {
     // #################### debugging ##############################
     Serial.println(OutStr);
   }
+
+  if (DisplayCycle != DisplayCycle_old)
+  {
+    // ####################### Display #####################
+    auto timeString = createTimeString(now);
+    auto timeStringNoDot = createTimeStringNoDot(now);
+    
+    DisplayCount++;
+    if (DisplayCount == 1 || DisplayCount == 2)
+    {
+      // print Temperature to LCD display
+      String TempIN = "TS:" + String(TempSet, 0) + "\337|TI:" + String(t, 1) + "\337";
+      String TempOUT = "H :" + Heater + "|HI:" + String(h, 1) + "%";
+      PrintToLCD(TempIN, TempOUT);
+    }
+    else if (DisplayCount == 3 || DisplayCount == 4)
+    {
+      // print humidity to LCD display
+      String HumIN = timeString + " |TO1:" + String(t_out, 1) + "\337";
+      String HumOUT = "H :" + Heater + "|HO1:" + String(h_out, 1) + "%";
+      PrintToLCD(HumIN, HumOUT);
+    }
+    else if (DisplayCount == 5 || DisplayCount == 6)
+    {
+      // print humidity to LCD display
+      String HumIN = timeStringNoDot + " |TO2:" + String(t_out2, 1) + "\337";
+      String HumOUT = "H :" + Heater + "|HO2:" + String(h_out2, 1) + "%";
+      PrintToLCD(HumIN, HumOUT);
+    }
+    else
+    {
+     DisplayCount = 0; 
+    }
+    // #################### debugging ##############################
+    String TmpOut = "Time: " + timeString;
+    Serial.println(TmpOut);
+  }
+
+
 }
 
 // #########################################################################
@@ -266,6 +316,20 @@ String createDateTimeString(DateTime now)
 	char buf[50];
 	sprintf(buf, "%02d-%02d-%4d; %02d:%02d:%02d", now.day(), now.month(), now.year(), now.hour(), now.minute(), now.second());
 	return buf;
+}
+
+String createTimeString(DateTime now)
+{
+  char buf[20];
+  sprintf(buf, "%02d:%02d", now.hour(), now.minute());
+  return buf;
+}
+
+String createTimeStringNoDot(DateTime now)
+{
+  char buf[20];
+  sprintf(buf, "%02d %02d", now.hour(), now.minute());
+  return buf;
 }
 
 void PrintToLCD(String line1, String line2)
