@@ -236,11 +236,14 @@ void loop() {
       // heating ON
       HeatingOn = true;
       Heater = "ON ";
-      heatOnTime = heatOnTime + 10;
-      EnergyCulmulative = EnergyCulmulative + PowerHeater * 10 / 3600; // cycle time is 10s, 3600 to make it kWh
       digitalWrite(relaisIN2, HIGH);  // Relais2 ON
     }
 
+	if (HeatingOn)
+	{
+      heatOnTime = heatOnTime + 10;
+      EnergyCulmulative = EnergyCulmulative + PowerHeater * 10 / 3600; // cycle time is 10s, 3600 to make it kWh
+	}
 
     // ##################### Looging to SD card ####################
     auto dateTimeString = createDateTimeString(now);
